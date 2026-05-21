@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environment
+venv/
+env/
+.venv/
+vigilai/backend/venv/
+
+# Database
+*.db
+*.sqlite3
+vigilai/backend/database/vigilai.db
+
+# Node
+node_modules/
+vigilai/frontend/node_modules/
+
+# Build output
+vigilai/frontend/dist/
+vigilai/frontend/.vite/
+
+# YOLO model weights (large binary files)
+*.pt
+*.pth
+*.onnx
+*.engine
+
+# Video files
+vigilai/backend/videos/*.mp4
+vigilai/backend/videos/*.avi
+vigilai/backend/videos/*.mov
+vigilai/backend/videos/*.mkv
+
+# Output frames
+vigilai/backend/outputs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
