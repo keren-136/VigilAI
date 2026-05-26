@@ -1,6 +1,7 @@
-// Use relative URL so it goes through the Vite dev proxy (/ws → ws://localhost:8000)
-// In production, replace with your deployed WS URL.
-const WS_URL = `ws://${window.location.host}/ws/alerts`
+// Connect directly to the backend — bypasses the Vite proxy entirely.
+// The backend has CORS open for all origins so this works in dev without issues.
+// For production, replace with your deployed WS URL.
+const WS_URL = 'ws://localhost:8000/ws/alerts'
 
 class AlertWebSocket {
   constructor() {
