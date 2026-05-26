@@ -1,19 +1,24 @@
 import { useState, useEffect, useRef } from 'react'
-import { Camera, Play, Square, Loader, Maximize2, AlertCircle } from 'lucide-react'
+import { Camera, Play, Square, Loader, Maximize2, Minimize2, AlertCircle, X } from 'lucide-react'
 import { api } from '../services/api'
 
 // Routes through Vite proxy → http://localhost:8000
 const STREAM_BASE = '/api/video-feed'
 
 export default function CameraCard({ cameraId, isActive, onStatusChange, alertSeverity }) {
-  const [loading, setLoading]           = useState(false)
-  const [videoPath, setVideoPath]       = useState('myvideo.mp4')
-  const [expanded, setExpanded]         = useState(false)
-  const [error, setError]               = useState(null)
+  const [loading, setLoading]             = useState(false)
+  const [videoPath, setVideoPath]         = useState('myvideo.mp4')
+  const [expanded, setExpanded]           = useState(false)
+  const [error, setError]                 = useState(null)
   const [streamLoading, setStreamLoading] = useState(false)
   const [availableVideos, setAvailableVideos] = useState([])
-  // Increment to force the browser to re-request the MJPEG stream
-  const [streamKey, setStreamKey]       = useState(0)
+
+  // streamKey: incremented to force the browser to re-request the MJPEG stream.
+  // One key for the card, one stable key for the fullscreen modal.
+  // The fullscreen key is set ONCE when the modal opens and never changes while
+  // the modal is open — this is critical for MJPEG which breaks on remount.
+  const [streamKey, setStreamKey]         = useState(0)
+  const [fsKey, setFsKey]                 = useState(0)
 
   // Fetch available video files from backend on mount
   useEffect(() => {
@@ -27,11 +32,10 @@ export default function CameraCard({ cameraId, isActive, onStatusChange, alertSe
       .catch(() => {})
   }, [])
 
-  // When camera becomes active: show spinner briefly, then reveal stream
+  // When camera becomes active: brief spinner, then show stream
   useEffect(() => {
     if (isActive) {
       setStreamLoading(true)
-      // Give the backend ~1 s to produce the first frame, then show the img
       const t = setTimeout(() => {
         setStreamKey(k => k + 1)
         setStreamLoading(false)
@@ -39,8 +43,26 @@ export default function CameraCard({ cameraId, isActive, onStatusChange, alertSe
       return () => clearTimeout(t)
     } else {
       setStreamLoading(false)
+      setExpanded(false) // close fullscreen if camera stops
     }
   }, [isActive])
+
+  // Set a stable fullscreen key ONCE when the modal opens.
+  // Never use Date.now() inline in JSX — it re-evaluates on every render
+  // and causes the <img> to remount continuously, killing the MJPEG stream.
+  useEffect(() => {
+    if (expanded) {
+      setFsKey(Date.now())
+    }
+  }, [expanded])
+
+  // ESC key closes the modal
+  useEffect(() => {
+    if (!expanded) return
+    const onKey = (e) => { if (e.key === 'Escape') setExpanded(false) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [expanded])
 
   const handleStart = async () => {
     setLoading(true)
@@ -69,8 +91,8 @@ export default function CameraCard({ cameraId, isActive, onStatusChange, alertSe
     }
   }
 
-  // Cache-bust on every new stream key
-  const streamUrl = `${STREAM_BASE}/${cameraId}?k=${streamKey}`
+  const streamUrl   = `${STREAM_BASE}/${cameraId}?k=${streamKey}`
+  const fsStreamUrl = `${STREAM_BASE}/${cameraId}?k=${fsKey}`
 
   const borderClass =
     alertSeverity === 'HIGH'   ? 'border-red-600/70'   :
@@ -80,9 +102,10 @@ export default function CameraCard({ cameraId, isActive, onStatusChange, alertSe
 
   return (
     <>
+      {/* ── Camera card ── */}
       <div className={`card transition-all duration-300 border ${borderClass}`}>
 
-        {/* ── Video area ── */}
+        {/* Video area */}
         <div
           className="relative bg-black rounded-lg overflow-hidden mb-3"
           style={{ aspectRatio: '16/9' }}
@@ -91,13 +114,9 @@ export default function CameraCard({ cameraId, isActive, onStatusChange, alertSe
             <>
               {/*
                * MJPEG stream.
-               *
-               * IMPORTANT: do NOT use display:none or conditional rendering on this
-               * <img>. MJPEG is a multipart/x-mixed-replace stream — the browser
-               * updates the image in-place as frames arrive. Hiding it prevents
-               * the browser from making the request at all.
-               *
-               * We always render it; the spinner overlay sits on top while loading.
+               * Always rendered with display:block — never conditionally hidden.
+               * MJPEG is a continuous multipart response; hiding the <img> stops
+               * the browser from receiving frames entirely.
                */}
               <img
                 key={streamKey}
@@ -106,13 +125,12 @@ export default function CameraCard({ cameraId, isActive, onStatusChange, alertSe
                 className="w-full h-full object-contain"
                 style={{ display: 'block' }}
                 onError={() => {
-                  // If stream errors, retry after 2 s
                   console.warn(`[${cameraId}] Stream error — retrying in 2s`)
                   setTimeout(() => setStreamKey(k => k + 1), 2000)
                 }}
               />
 
-              {/* Spinner overlay — shown only during the initial 1 s wait */}
+              {/* Spinner overlay during initial 1 s wait */}
               {streamLoading && (
                 <div className="absolute inset-0 flex items-center justify-center bg-black/70">
                   <div className="text-center">
@@ -123,7 +141,6 @@ export default function CameraCard({ cameraId, isActive, onStatusChange, alertSe
               )}
             </>
           ) : (
-            /* Inactive placeholder */
             <div className="w-full h-full flex items-center justify-center text-gray-700">
               <div className="text-center">
                 <Camera size={28} className="mx-auto mb-1.5" />
@@ -157,18 +174,19 @@ export default function CameraCard({ cameraId, isActive, onStatusChange, alertSe
             </div>
           )}
 
-          {/* Expand button */}
+          {/* Expand button — only when stream is live */}
           {isActive && !streamLoading && (
             <button
               onClick={() => setExpanded(true)}
-              className="absolute bottom-2 right-2 bg-black/60 hover:bg-black/80 text-gray-400 hover:text-white p-1 rounded"
+              title="Fullscreen (ESC to close)"
+              className="absolute bottom-2 right-2 bg-black/60 hover:bg-black/80 text-gray-400 hover:text-white p-1 rounded transition-colors"
             >
               <Maximize2 size={12} />
             </button>
           )}
         </div>
 
-        {/* ── Error message ── */}
+        {/* Error message */}
         {error && (
           <div className="flex items-center gap-1.5 text-red-400 text-xs mb-2 px-1">
             <AlertCircle size={12} />
@@ -176,7 +194,7 @@ export default function CameraCard({ cameraId, isActive, onStatusChange, alertSe
           </div>
         )}
 
-        {/* ── Controls ── */}
+        {/* Controls */}
         <div className="flex items-center gap-2">
           {availableVideos.length > 0 ? (
             <select
@@ -226,26 +244,93 @@ export default function CameraCard({ cameraId, isActive, onStatusChange, alertSe
       {/* ── Fullscreen modal ── */}
       {expanded && (
         <div
-          className="fixed inset-0 z-50 bg-black/95 flex items-center justify-center p-6"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/95"
           onClick={() => setExpanded(false)}
         >
-          <div className="relative w-full max-w-5xl" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-white font-mono text-sm">{cameraId} — Live Feed</span>
+          {/*
+           * Stop click propagation so clicking the video/controls doesn't close the modal.
+           * Max width 90vw, max height 90vh — preserves aspect ratio on any screen.
+           */}
+          <div
+            className="relative w-full max-w-5xl mx-4"
+            style={{ maxHeight: '90vh' }}
+            onClick={e => e.stopPropagation()}
+          >
+            {/* Modal header */}
+            <div className="flex items-center justify-between mb-2 px-1">
+              <div className="flex items-center gap-2">
+                <span className="w-1.5 h-1.5 bg-red-500 rounded-full animate-pulse" />
+                <span className="text-white font-mono text-sm">{cameraId} — Live Feed</span>
+                {alertSeverity && (
+                  <span className={`text-xs font-bold px-2 py-0.5 rounded ${
+                    alertSeverity === 'HIGH'   ? 'bg-red-900/80 text-red-300'    :
+                    alertSeverity === 'MEDIUM' ? 'bg-amber-900/80 text-amber-300' :
+                                                'bg-green-900/80 text-green-300'
+                  }`}>
+                    {alertSeverity}
+                  </span>
+                )}
+              </div>
               <button
                 onClick={() => setExpanded(false)}
-                className="text-gray-400 hover:text-white text-xs px-3 py-1 border border-dark-600 rounded"
+                className="flex items-center gap-1.5 text-gray-400 hover:text-white text-xs px-3 py-1.5 border border-dark-600 hover:border-gray-500 rounded transition-colors"
               >
-                Close ✕
+                <X size={12} />
+                Close
               </button>
             </div>
-            <img
-              key={`fullscreen-${Date.now()}`}
-              src={`${STREAM_BASE}/${cameraId}?k=${Date.now()}`}
-              alt={`${cameraId} fullscreen`}
-              className="w-full rounded-lg border border-dark-600"
-              style={{ display: 'block' }}
-            />
+
+            {/* Stream container — black background, 16:9 aspect ratio */}
+            <div
+              className="relative bg-black rounded-lg overflow-hidden border border-dark-600"
+              style={{ aspectRatio: '16/9', width: '100%' }}
+            >
+              {/*
+               * fsKey is set ONCE via useEffect when the modal opens.
+               * It never changes while the modal is open, so this <img> is
+               * never remounted — the MJPEG connection stays alive.
+               *
+               * This is the same backend stream as the card (same camera_id),
+               * just a second HTTP connection to the same MJPEG endpoint.
+               * No second detection pipeline is created.
+               */}
+              <img
+                key={fsKey}
+                src={fsStreamUrl}
+                alt={`${cameraId} fullscreen feed`}
+                style={{
+                  display: 'block',
+                  width: '100%',
+                  height: '100%',
+                  objectFit: 'contain',
+                }}
+              />
+
+              {/* Camera ID overlay */}
+              <div className="absolute top-3 left-3 bg-black/70 text-xs text-gray-300 px-2 py-1 rounded font-mono">
+                {cameraId}
+              </div>
+
+              {/* REC indicator */}
+              <div className="absolute top-3 right-3 flex items-center gap-1.5 bg-black/70 px-2 py-1 rounded">
+                <span className="w-1.5 h-1.5 bg-red-500 rounded-full animate-pulse" />
+                <span className="text-red-400 text-xs font-mono">REC</span>
+              </div>
+
+              {/* Minimize button inside the stream */}
+              <button
+                onClick={() => setExpanded(false)}
+                title="Exit fullscreen (ESC)"
+                className="absolute bottom-3 right-3 bg-black/60 hover:bg-black/80 text-gray-400 hover:text-white p-1.5 rounded transition-colors"
+              >
+                <Minimize2 size={14} />
+              </button>
+
+              {/* ESC hint */}
+              <div className="absolute bottom-3 left-3 text-gray-600 text-xs">
+                Press ESC to close
+              </div>
+            </div>
           </div>
         </div>
       )}
