@@ -68,13 +68,25 @@ async def start_detection(request: DetectionStartRequest):
     await _stop_camera(camera_id)
 
     # Resolve video path
-    video_path = request.video_path
-    if not os.path.isabs(video_path):
-        video_path = str(VIDEOS_DIR / video_path)
+    video_path = request.video_path.strip()
 
-    is_demo = not os.path.exists(video_path)
-    if is_demo:
-        logger.warning(f"Video not found: {video_path} — using demo mode")
+    # Explicit "demo" keyword → skip file lookup
+    if video_path.lower() == "demo":
+        is_demo = True
+        logger.info(f"Demo mode requested for {camera_id}")
+    else:
+        if not os.path.isabs(video_path):
+            # Auto-append .mp4 if no extension given
+            if not Path(video_path).suffix:
+                video_path = video_path + '.mp4'
+            video_path = str(VIDEOS_DIR / video_path)
+        is_demo = not os.path.exists(video_path)
+        if is_demo:
+            logger.warning(
+                f"Video not found: {video_path} — falling back to demo mode"
+            )
+        else:
+            logger.info(f"Starting detection on: {video_path} [{camera_id}]")
 
     async def alert_cb(alert: dict):
         await handle_alert(alert, camera_id=camera_id)
@@ -90,9 +102,10 @@ async def start_detection(request: DetectionStartRequest):
     task = loop.create_task(_run_detector(detector, video_path, is_demo))
     _active_tasks[camera_id] = task
 
+    mode = "demo" if is_demo else "live"
     return DetectionStatusResponse(
         status="started",
-        message=f"Detection started for {camera_id}",
+        message=f"Detection started for {camera_id} ({mode} mode)",
         camera_id=camera_id,
     )
 
@@ -213,21 +226,20 @@ async def _run_detector(detector, video_path: str, is_demo: bool):
 async def _run_demo(detector):
     """
     Demo mode: synthetic detections + rendered canvas frames.
-
-    Order matters:
-      1. Get detections for this frame
-      2. Run behaviour engine → get alerts
-      3. Update _active_labels on detector (used by render_demo_frame)
-      4. Render frame (now labels are up-to-date)
-      5. Fire alert callbacks
+    Also fires a synthetic alert every 15 s so the WebSocket pipeline
+    can be verified even before real behaviour thresholds are met.
     """
-    from ai.behaviour_engine import BehaviourEngine
-
-    engine    = BehaviourEngine()
     frame_idx = 0
     detector.running = True
+    engine = detector.engine
+    last_synthetic_alert = 0.0
+
+    logger.info(f"Demo mode started for {detector.camera_id}")
 
     while detector.running:
+        import time
+        now = time.time()
+
         # Step 1 — synthetic detections
         detections = detector._demo_detections(frame_idx)
 
@@ -244,11 +256,30 @@ async def _run_demo(detector):
         # Step 4 — render frame with up-to-date labels
         detector.latest_frame = detector.render_demo_frame(frame_idx)
 
-        # Step 5 — fire alert callbacks
+        # Step 5 — fire real behaviour alerts
         for alert in alerts:
             alert["camera_id"] = detector.camera_id
             if detector.alert_callback:
                 await detector.alert_callback(alert)
 
+        # Step 6 — synthetic debug alert every 15 s to verify WS pipeline
+        if (now - last_synthetic_alert) >= 15.0:
+            last_synthetic_alert = now
+            from datetime import datetime, timezone
+            synthetic = {
+                "timestamp":        datetime.now(timezone.utc).isoformat(),
+                "severity":         "LOW",
+                "action_type":      "loitering",
+                "track_ids":        "1",
+                "camera_id":        detector.camera_id,
+                "description":      "Demo: Person #1 loitering near entrance",
+                "duration_seconds": 15.0,
+            }
+            if detector.alert_callback:
+                await detector.alert_callback(synthetic)
+            logger.info(f"[Demo] Synthetic alert fired for {detector.camera_id}")
+
         frame_idx += 1
-        await asyncio.sleep(1 / 15)   # 15 fps
+        await asyncio.sleep(1 / 15)
+
+    logger.info(f"Demo mode stopped for {detector.camera_id}")

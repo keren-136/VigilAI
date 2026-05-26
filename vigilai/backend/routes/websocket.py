@@ -14,18 +14,26 @@ router = APIRouter(tags=["websocket"])
 async def websocket_alerts(websocket: WebSocket):
     """
     Frontend connects here to receive live alert events.
-    Messages are JSON objects with shape:
-      { type, id, timestamp, severity, action_type, track_ids, camera_id, description }
+    On connect, sends a confirmation message.
+    Messages are JSON: { type, id, timestamp, severity, action_type, ... }
     """
     await manager.connect(websocket)
+
+    # Send immediate confirmation so frontend knows the connection is live
+    await manager.send_personal(websocket, {
+        "type": "connection",
+        "status": "connected",
+        "message": "VigilAI WebSocket connected",
+    })
+
     try:
-        # Keep connection alive; we only push from server side
+        # Keep connection alive — server pushes alerts, client sends nothing
         while True:
-            # Receive any ping/pong or client messages (ignored)
             data = await websocket.receive_text()
-            logger.debug(f"WS received: {data}")
+            logger.debug(f"WS received from client: {data}")
     except WebSocketDisconnect:
         manager.disconnect(websocket)
+        logger.info("WS client disconnected cleanly")
     except Exception as e:
         logger.warning(f"WS error: {e}")
         manager.disconnect(websocket)

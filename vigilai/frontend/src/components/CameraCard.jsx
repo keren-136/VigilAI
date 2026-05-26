@@ -1,31 +1,56 @@
-import { useState, useEffect } from 'react'
-import { Camera, Play, Square, Loader, Maximize2 } from 'lucide-react'
+import { useState, useEffect, useRef } from 'react'
+import { Camera, Play, Square, Loader, Maximize2, AlertCircle } from 'lucide-react'
 import { api } from '../services/api'
 
-const STREAM_BASE = 'http://localhost:8000/api/video-feed'
+// Routes through Vite proxy → http://localhost:8000
+const STREAM_BASE = '/api/video-feed'
 
 export default function CameraCard({ cameraId, isActive, onStatusChange, alertSeverity }) {
-  const [loading, setLoading]     = useState(false)
-  const [videoPath, setVideoPath] = useState('demo')
-  const [expanded, setExpanded]   = useState(false)
-  // Bust the cache every time the camera starts so the browser re-requests
-  const [streamKey, setStreamKey] = useState(0)
+  const [loading, setLoading]           = useState(false)
+  const [videoPath, setVideoPath]       = useState('myvideo.mp4')
+  const [expanded, setExpanded]         = useState(false)
+  const [error, setError]               = useState(null)
+  const [streamLoading, setStreamLoading] = useState(false)
+  const [availableVideos, setAvailableVideos] = useState([])
+  // Increment to force the browser to re-request the MJPEG stream
+  const [streamKey, setStreamKey]       = useState(0)
 
+  // Fetch available video files from backend on mount
+  useEffect(() => {
+    api.getVideos()
+      .then(data => {
+        if (data.videos?.length) {
+          setAvailableVideos(data.videos)
+          setVideoPath(data.videos[0])
+        }
+      })
+      .catch(() => {})
+  }, [])
+
+  // When camera becomes active: show spinner briefly, then reveal stream
   useEffect(() => {
     if (isActive) {
-      // Small delay so the backend detector has time to produce the first frame
-      const t = setTimeout(() => setStreamKey(k => k + 1), 600)
+      setStreamLoading(true)
+      // Give the backend ~1 s to produce the first frame, then show the img
+      const t = setTimeout(() => {
+        setStreamKey(k => k + 1)
+        setStreamLoading(false)
+      }, 1000)
       return () => clearTimeout(t)
+    } else {
+      setStreamLoading(false)
     }
   }, [isActive])
 
   const handleStart = async () => {
     setLoading(true)
+    setError(null)
     try {
-      await api.startDetection(videoPath, cameraId)
+      await api.startDetection(videoPath || 'demo', cameraId)
       onStatusChange(cameraId, true)
     } catch (e) {
       console.error('Start detection failed:', e)
+      setError('Failed to start — is the backend running?')
     } finally {
       setLoading(false)
     }
@@ -33,6 +58,7 @@ export default function CameraCard({ cameraId, isActive, onStatusChange, alertSe
 
   const handleStop = async () => {
     setLoading(true)
+    setError(null)
     try {
       await api.stopDetection(cameraId)
       onStatusChange(cameraId, false)
@@ -43,6 +69,7 @@ export default function CameraCard({ cameraId, isActive, onStatusChange, alertSe
     }
   }
 
+  // Cache-bust on every new stream key
   const streamUrl = `${STREAM_BASE}/${cameraId}?k=${streamKey}`
 
   const borderClass =
@@ -61,30 +88,52 @@ export default function CameraCard({ cameraId, isActive, onStatusChange, alertSe
           style={{ aspectRatio: '16/9' }}
         >
           {isActive ? (
-            /*
-             * MJPEG stream.
-             * The browser keeps this <img> alive and updates it as new
-             * JPEG frames arrive from the multipart/x-mixed-replace stream.
-             * No onLoad gating — just show it directly.
-             */
-            <img
-              key={streamKey}
-              src={streamUrl}
-              alt={`${cameraId} live feed`}
-              className="w-full h-full object-contain"
-              style={{ display: 'block' }}
-            />
+            <>
+              {/*
+               * MJPEG stream.
+               *
+               * IMPORTANT: do NOT use display:none or conditional rendering on this
+               * <img>. MJPEG is a multipart/x-mixed-replace stream — the browser
+               * updates the image in-place as frames arrive. Hiding it prevents
+               * the browser from making the request at all.
+               *
+               * We always render it; the spinner overlay sits on top while loading.
+               */}
+              <img
+                key={streamKey}
+                src={streamUrl}
+                alt={`${cameraId} live feed`}
+                className="w-full h-full object-contain"
+                style={{ display: 'block' }}
+                onError={() => {
+                  // If stream errors, retry after 2 s
+                  console.warn(`[${cameraId}] Stream error — retrying in 2s`)
+                  setTimeout(() => setStreamKey(k => k + 1), 2000)
+                }}
+              />
+
+              {/* Spinner overlay — shown only during the initial 1 s wait */}
+              {streamLoading && (
+                <div className="absolute inset-0 flex items-center justify-center bg-black/70">
+                  <div className="text-center">
+                    <Loader size={20} className="animate-spin text-blue-400 mx-auto mb-1" />
+                    <p className="text-xs text-gray-400">Starting stream…</p>
+                  </div>
+                </div>
+              )}
+            </>
           ) : (
             /* Inactive placeholder */
             <div className="w-full h-full flex items-center justify-center text-gray-700">
               <div className="text-center">
                 <Camera size={28} className="mx-auto mb-1.5" />
                 <p className="text-xs">Feed Inactive</p>
+                <p className="text-xs mt-1 text-gray-800">Select video and click Start</p>
               </div>
             </div>
           )}
 
-          {/* Camera ID badge — always visible */}
+          {/* Camera ID badge */}
           <div className="absolute top-2 left-2 bg-black/70 text-xs text-gray-300 px-2 py-0.5 rounded font-mono">
             {cameraId}
           </div>
@@ -109,7 +158,7 @@ export default function CameraCard({ cameraId, isActive, onStatusChange, alertSe
           )}
 
           {/* Expand button */}
-          {isActive && (
+          {isActive && !streamLoading && (
             <button
               onClick={() => setExpanded(true)}
               className="absolute bottom-2 right-2 bg-black/60 hover:bg-black/80 text-gray-400 hover:text-white p-1 rounded"
@@ -119,16 +168,39 @@ export default function CameraCard({ cameraId, isActive, onStatusChange, alertSe
           )}
         </div>
 
+        {/* ── Error message ── */}
+        {error && (
+          <div className="flex items-center gap-1.5 text-red-400 text-xs mb-2 px-1">
+            <AlertCircle size={12} />
+            {error}
+          </div>
+        )}
+
         {/* ── Controls ── */}
         <div className="flex items-center gap-2">
-          <input
-            type="text"
-            value={videoPath}
-            onChange={(e) => setVideoPath(e.target.value)}
-            placeholder="video.mp4 or demo"
-            disabled={isActive}
-            className="flex-1 bg-dark-700 border border-dark-500 rounded-lg px-3 py-1.5 text-xs text-gray-300 placeholder-gray-600 focus:outline-none focus:border-blue-600 disabled:opacity-40"
-          />
+          {availableVideos.length > 0 ? (
+            <select
+              value={videoPath}
+              onChange={e => setVideoPath(e.target.value)}
+              disabled={isActive}
+              className="flex-1 bg-dark-700 border border-dark-500 rounded-lg px-3 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-blue-600 disabled:opacity-40"
+            >
+              {availableVideos.map(v => (
+                <option key={v} value={v}>{v}</option>
+              ))}
+              <option value="demo">demo (synthetic)</option>
+            </select>
+          ) : (
+            <input
+              type="text"
+              value={videoPath}
+              onChange={e => setVideoPath(e.target.value)}
+              placeholder="myvideo.mp4 or demo"
+              disabled={isActive}
+              className="flex-1 bg-dark-700 border border-dark-500 rounded-lg px-3 py-1.5 text-xs text-gray-300 placeholder-gray-600 focus:outline-none focus:border-blue-600 disabled:opacity-40"
+            />
+          )}
+
           {isActive ? (
             <button
               onClick={handleStop}
@@ -168,6 +240,7 @@ export default function CameraCard({ cameraId, isActive, onStatusChange, alertSe
               </button>
             </div>
             <img
+              key={`fullscreen-${Date.now()}`}
               src={`${STREAM_BASE}/${cameraId}?k=${Date.now()}`}
               alt={`${cameraId} fullscreen`}
               className="w-full rounded-lg border border-dark-600"

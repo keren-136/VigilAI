@@ -1,4 +1,6 @@
-const WS_URL = 'ws://localhost:8000/ws/alerts'
+// Use relative URL so it goes through the Vite dev proxy (/ws → ws://localhost:8000)
+// In production, replace with your deployed WS URL.
+const WS_URL = `ws://${window.location.host}/ws/alerts`
 
 class AlertWebSocket {
   constructor() {

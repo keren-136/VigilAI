@@ -90,8 +90,11 @@ class VideoDetector:
         if not YOLO_AVAILABLE:
             return None
         if self._model is None:
-            logger.info("Loading YOLOv8n model …")
-            self._model = YOLO("yolov8n.pt")
+            # Always load from the backend directory regardless of cwd
+            model_path = Path(__file__).parent.parent / "yolov8n.pt"
+            logger.info(f"Loading YOLOv8n model from {model_path} …")
+            self._model = YOLO(str(model_path))
+            logger.info("YOLOv8n model loaded OK")
         return self._model
 
     # ── Main processing loop (real video) ─────────────────────────────────────
@@ -158,6 +161,14 @@ class VideoDetector:
 
                 # ── Encode and store ───────────────────────────────────────
                 self.latest_frame = self._encode_jpeg(annotated_frame)
+
+                # ── Log progress every 30 frames ──────────────────────────
+                if frame_idx % 30 == 0:
+                    logger.info(
+                        f"[{self.camera_id}] Frame {frame_idx} | "
+                        f"Detections: {len(detections)} | "
+                        f"Frame size: {len(self.latest_frame)} bytes"
+                    )
 
                 # ── Fire alert callbacks ───────────────────────────────────
                 for alert in alerts:

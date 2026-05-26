@@ -1,5 +1,10 @@
 """
 VigilAI — FastAPI Backend Entry Point
+
+Run with:
+  cd vigilai/backend
+  source venv/bin/activate
+  uvicorn main:app --reload --port 8000
 """
 import logging
 from contextlib import asynccontextmanager
@@ -23,7 +28,12 @@ logger = logging.getLogger("vigilai")
 # ── Lifespan ──────────────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    logger.info("=" * 60)
     logger.info("VigilAI backend starting …")
+    logger.info("  API docs : http://localhost:8000/docs")
+    logger.info("  WS alerts: ws://localhost:8000/ws/alerts")
+    logger.info("  Video feed: http://localhost:8000/api/video-feed/CAM-01")
+    logger.info("=" * 60)
     init_db()
     logger.info("Database initialised.")
     yield
@@ -38,9 +48,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Allow all origins in dev — tighten in production
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "*"],
+    allow_origins=["*"],
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -58,6 +69,7 @@ def root():
         "name": "VigilAI",
         "status": "running",
         "docs": "/docs",
+        "websocket": "ws://localhost:8000/ws/alerts",
     }
 
 
